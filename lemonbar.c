@@ -125,7 +125,7 @@ static XftColor sel_fg;
 static XftDraw *xft_draw;
 
 //char width lookuptable
-#define MAX_WIDTHS (1 << 16)
+#define MAX_WIDTHS (1 << 22)
 static wchar_t xft_char[MAX_WIDTHS];
 static char    xft_width[MAX_WIDTHS];
 
@@ -224,10 +224,10 @@ xcb_void_cookie_t xcb_poly_text_16_simple(xcb_connection_t * c,
 }
 
 
-int
-xft_char_width_slot (uint16_t ch)
+uint32_t
+xft_char_width_slot (uint32_t ch)
 {
-    int slot = ch % MAX_WIDTHS;
+    uint32_t slot = ch % MAX_WIDTHS;
     while (xft_char[slot] != 0 && xft_char[slot] != ch)
     {
         slot = (slot + 1) % MAX_WIDTHS;
@@ -235,9 +235,10 @@ xft_char_width_slot (uint16_t ch)
     return slot;
 }
 
-int xft_char_width (uint16_t ch, font_t *cur_font)
+int
+xft_char_width (uint32_t ch, font_t *cur_font)
 {
-    int slot = xft_char_width_slot(ch);
+    uint32_t slot = xft_char_width_slot(ch);
     if (!xft_char[slot]) {
         XGlyphInfo gi;
         FT_UInt glyph = XftCharIndex (dpy, cur_font->xft_ft, (FcChar32) ch);
@@ -300,7 +301,7 @@ draw_shift (monitor_t *mon, int x, int align, int w)
 }
 
 int
-draw_char (monitor_t *mon, font_t *cur_font, int x, int align, uint16_t ch)
+draw_char (monitor_t *mon, font_t *cur_font, int x, int align, uint32_t ch)
 {
     int ch_width;
 
@@ -316,15 +317,19 @@ draw_char (monitor_t *mon, font_t *cur_font, int x, int align, uint16_t ch)
 
     int y = bh / 2 + cur_font->height / 2- cur_font->descent + offsets_y[offset_y_index];
     if (cur_font->xft_ft) {
-        XftDrawString16 (xft_draw, &sel_fg, cur_font->xft_ft, x,y, &ch, 1);
+        XftDrawString32 (xft_draw, &sel_fg, cur_font->xft_ft, x,y, &ch, 1);
     } else {
+        if (ch > 0xfffd)
+            ch = 0xfffd;
+
         /* xcb accepts string in UCS-2 BE, so swap */
         ch = (ch >> 8) | (ch << 8);
-        
+        uint16_t cr_ch = (uint16_t)ch;
+
         // The coordinates here are those of the baseline
         xcb_poly_text_16_simple(c, mon->pixmap, gc[GC_DRAW],
                             x, y,
-                            1, &ch);
+                            1, &cr_ch);
     }
 
     draw_lines(mon, x, ch_width);
@@ -543,7 +548,7 @@ area_add (char *str, const char *optend, char **end, monitor_t *mon, const int x
 }
 
 bool
-font_has_glyph (font_t *font, const uint16_t c)
+font_has_glyph (font_t *font, const uint32_t c)
 {
     if (font->xft_ft) {
         if (XftCharExists(dpy, font->xft_ft, (FcChar32) c)) {
@@ -564,7 +569,7 @@ font_has_glyph (font_t *font, const uint16_t c)
 }
 
 font_t *
-select_drawable_font (const uint16_t c)
+select_drawable_font (const uint32_t c)
 {
     // If the user has specified a font to use, try that first.
     if (font_index != -1 && font_has_glyph(font_list[font_index - 1], c)) {
@@ -715,7 +720,7 @@ parse (char *text)
                 p++;
 
             uint8_t *utf = (uint8_t *)p;
-            uint16_t ucs;
+            uint32_t ucs;
 
             // ASCII
             if (utf[0] < 0x80) {
@@ -734,7 +739,7 @@ parse (char *text)
             }
             // Four byte utf8 sequence
             else if ((utf[0] & 0xf8) == 0xf0) {
-                ucs = 0xfffd;
+                ucs = (utf[0] & 0x7) << 18 | (utf[1] & 0x3f) << 12 | (utf[2] & 0x3f) << 6 | (utf[3] & 0x3f);
                 p += 4;
             }
             // Five byte utf8 sequence
